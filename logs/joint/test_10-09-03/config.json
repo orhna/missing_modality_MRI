@@ -1,0 +1,89 @@
+{
+    "Training_config": {
+        "checkpoint_path": "/data/hjlee/orhun/thesis/models/joint_hs3_hs4_5e-4/joint_hs3_hs4_5e-4_checkpoint_Epoch_400.pt",
+        "continue_training": false,
+        "cropped_input_size": [
+            128,
+            128,
+            128
+        ],
+        "dataset_to_train": [
+            "BRATS21"
+        ],
+        "drop_mode": "modality_mean",
+        "epoch": 500,
+        "experiment_name": "test",
+        "feature_size": 12,
+        "lr": 0.0005,
+        "lr_scheduler": true,
+        "modalities_to_train": [
+            "FLAIR",
+            "T1c",
+            "T1",
+            "T2"
+        ],
+        "model_save_path": "/data/hjlee/orhun/thesis/models/",
+        "output_channel": 3,
+        "random_modality_drop": true,
+        "recon_level": "hs3_hs4",
+        "sch_gamma": 0.8,
+        "sch_step_size": 50,
+        "seed": 55,
+        "train_batch_size": 1,
+        "use_memory": false,
+        "val_interval": 20,
+        "weight_decay": 0.0001,
+        "workers": 2
+    },
+    "Database_config": {
+        "channels": {
+            "BRATS18": [
+                "FLAIR",
+                "T1",
+                "T1c",
+                "T2"
+            ],
+            "BRATS21": [
+                "T1c",
+                "T1",
+                "FLAIR",
+                "T2"
+            ]
+        },
+        "img_path": {
+            "BRATS18": "/data/hjlee/orhun/data/BRATS18/BRATS18_Preprocessed_C/Training/Images",
+            "BRATS21": "/data/hjlee/orhun/data/BRATS21_Processed/Training/Images"
+        },
+        "seg_path": {
+            "BRATS18": "/data/hjlee/orhun/data/BRATS18/BRATS18_Preprocessed_C/Training/Labels",
+            "BRATS21": "/data/hjlee/orhun/data/BRATS21_Processed/Training/Labels"
+        },
+        "split_path": {
+            "BRATS18": {
+                "train": "/data/hjlee/orhun/data/BRATS18/BRATS18_Preprocessed/train_val.txt",
+                "val": "/data/hjlee/orhun/data/BRATS18/BRATS18_Preprocessed/val_test.txt",
+                "test": "/data/hjlee/orhun/data/BRATS18/BRATS18_Preprocessed/test.txt"
+            },
+            "BRATS21": {
+                "train": "/data/hjlee/orhun/data/BRATS21_Processed/train.txt",
+                "val": "/data/hjlee/orhun/data/BRATS21_Processed/test.txt",
+                "test": "/data/hjlee/orhun/data/BRATS21_Processed/test.txt"
+            }
+        }
+    },
+    "Test_config": {
+        "crop_size": 128,
+        "dataset": "BRATS18",
+        "feature_size": 12,
+        "modalities": [
+            "FLAIR",
+            "T1c",
+            "T1",
+            "T2"
+        ],
+        "model_file_path": "/data/hjlee/orhun/thesis/models/mm12_sd_ds_dicece_rd_evalall_updated/mm12_sd_ds_dicece_rd_evalall_updated_checkpoint_Epoch_420.pt",
+        "n_of_output_c": 3,
+        "pc_mean_path": "/mnt/disk1/hjlee/orhun/repo/thesis/pc_mean.pt",
+        "random_dropping": "modality_mean"
+    }
+}

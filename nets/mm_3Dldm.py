@@ -1,7 +1,13 @@
+# legacy code
+# used in experiments that didn't yield decent results
+
 import torch
 import torch.nn.functional as F
 from .denoising_diffusion_pytorch.denoising_diffusion_pytorch_3D import Unet3D, GaussianDiffusion3D
 from nets.multimodal_swinunetr import Multimodal_SwinUNETR
+
+PRECOMPUTED_MEAN_FEATURES_12 = ""
+PRECOMPUTED_MEAN_FEATURES_24 = ""
 
 class mm_3Dldm(torch.nn.Module):
 
@@ -20,9 +26,9 @@ class mm_3Dldm(torch.nn.Module):
         self.image_size = 4
     
         if self.fs == 12:
-            self.mean_features = torch.load("/mnt/disk1/hjlee/orhun/repo/thesis/mean_features_mm12_sd_ds_separate_768_4_4_4.pt", map_location=self.device)
+            self.mean_features = torch.load(PRECOMPUTED_MEAN_FEATURES_12, map_location=self.device)
         elif self.fs == 24:
-            self.mean_features = torch.load("/mnt/disk1/hjlee/orhun/repo/thesis/mean_features_1536_4_4_4.pt", map_location=self.device)
+            self.mean_features = torch.load(PRECOMPUTED_MEAN_FEATURES_24, map_location=self.device)
     
         # feature extraction related
         self.swinunetr = Multimodal_SwinUNETR(
@@ -72,14 +78,14 @@ class mm_3Dldm(torch.nn.Module):
 
 def extract_complete_modality_features(model, complete_modality_image, diff_on):
         with torch.no_grad():
-            c_hidden_states_out_m1 = model.swinViT_1(complete_modality_image[:,0:1,:,:], normalize=True)[4]
-            c_hidden_states_out_m2 = model.swinViT_2(complete_modality_image[:,1:2,:,:], normalize=True)[4]
-            c_hidden_states_out_m3 = model.swinViT_3(complete_modality_image[:,2:3,:,:], normalize=True)[4]
-            c_hidden_states_out_m4 = model.swinViT_4(complete_modality_image[:,3:4,:,:], normalize=True)[4]
-            c_dec4_m1 = model.encoder10_1(c_hidden_states_out_m1)
-            c_dec4_m2 = model.encoder10_2(c_hidden_states_out_m2)
-            c_dec4_m3 = model.encoder10_3(c_hidden_states_out_m3)
-            c_dec4_m4 = model.encoder10_4(c_hidden_states_out_m4)
+            c_hidden_states_out_m1 = model.swinViTs[0](complete_modality_image[:,0:1,:,:], normalize=True)[4]
+            c_hidden_states_out_m2 = model.swinViTs[1](complete_modality_image[:,1:2,:,:], normalize=True)[4]
+            c_hidden_states_out_m3 = model.swinViTs[2](complete_modality_image[:,2:3,:,:], normalize=True)[4]
+            c_hidden_states_out_m4 = model.swinViTs[3](complete_modality_image[:,3:4,:,:], normalize=True)[4]
+            c_dec4_m1 = model.encoder10_list[0](c_hidden_states_out_m1)
+            c_dec4_m2 = model.encoder10_list[1](c_hidden_states_out_m2)
+            c_dec4_m3 = model.encoder10_list[2](c_hidden_states_out_m3)
+            c_dec4_m4 = model.encoder10_list[3](c_hidden_states_out_m4)
 
             if diff_on == "combined":
                 complete_modality_features = model.channel_reduction_6(torch.cat((c_dec4_m1, c_dec4_m2, c_dec4_m3, c_dec4_m4), dim=1))
@@ -133,14 +139,14 @@ class mm_3DLDMWrapper:
 
         with torch.no_grad():
 
-            m_hidden_states_out_m1 = self.ldm_model.swinunetr.swinViT_1(missing_modality_image[:,0:1,:,:], normalize=True)[4]
-            m_hidden_states_out_m2 = self.ldm_model.swinunetr.swinViT_2(missing_modality_image[:,1:2,:,:], normalize=True)[4]
-            m_hidden_states_out_m3 = self.ldm_model.swinunetr.swinViT_3(missing_modality_image[:,2:3,:,:], normalize=True)[4]
-            m_hidden_states_out_m4 = self.ldm_model.swinunetr.swinViT_4(missing_modality_image[:,3:4,:,:], normalize=True)[4]
-            m_dec4_m1 = self.ldm_model.swinunetr.encoder10_1(m_hidden_states_out_m1)
-            m_dec4_m2 = self.ldm_model.swinunetr.encoder10_2(m_hidden_states_out_m2)
-            m_dec4_m3 = self.ldm_model.swinunetr.encoder10_3(m_hidden_states_out_m3)
-            m_dec4_m4 = self.ldm_model.swinunetr.encoder10_4(m_hidden_states_out_m4)
+            m_hidden_states_out_m1 = self.ldm_model.swinunetr.swinViTs[0](missing_modality_image[:,0:1,:,:], normalize=True)[4]
+            m_hidden_states_out_m2 = self.ldm_model.swinunetr.swinViTs[1](missing_modality_image[:,1:2,:,:], normalize=True)[4]
+            m_hidden_states_out_m3 = self.ldm_model.swinunetr.swinViTs[2](missing_modality_image[:,2:3,:,:], normalize=True)[4]
+            m_hidden_states_out_m4 = self.ldm_model.swinunetr.swinViTs[3](missing_modality_image[:,3:4,:,:], normalize=True)[4]
+            m_dec4_m1 = self.ldm_model.swinunetr.encoder10_list[0](m_hidden_states_out_m1)
+            m_dec4_m2 = self.ldm_model.swinunetr.encoder10_list[1](m_hidden_states_out_m2)
+            m_dec4_m3 = self.ldm_model.swinunetr.encoder10_list[2](m_hidden_states_out_m3)
+            m_dec4_m4 = self.ldm_model.swinunetr.encoder10_list[3](m_hidden_states_out_m4)
             
             missing_modality_features = torch.cat((m_dec4_m1, m_dec4_m2, m_dec4_m3, m_dec4_m4), dim=1) # ([B, 4 * 768, 8, 8])
             
@@ -152,7 +158,7 @@ class mm_3DLDMWrapper:
                                                                         self.ldm_model.fs,
                                                                         self.ldm_model.mean_features)
             elif self.ldm_model.diff_on == "combined":
-                missing_modality_features = self.ldm_model.swinunetr.channel_reduction_6(missing_modality_features)
+                missing_modality_features = self.ldm_model.swinunetr.channel_reductions[5](missing_modality_features)
 
             generated_features = self.ldm_model.diffusion.diff_sample(missing_modality_features)
             

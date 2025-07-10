@@ -100,14 +100,12 @@ def create_dataloader_original(images,
         ]
     )
     train_labeltrans = Compose(
-        [   Lambda(select_channels),
+        [   #Lambda(select_channels),
             EnsureChannelFirst(strict_check=True),
             ConvertToMultiChannelBasedOnBratsClassesCustom(),
-            RandFlip(prob=0.5,spatial_axis=[0, 1, 2]),
             RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
             RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ]
-    )
+        ])
 
     val_imtrans = Compose(
         [   Lambda(select_channels),
@@ -397,7 +395,7 @@ def save_config_from_py(file_path, logdir):
     
     print("Config saved as .json")
 
-def rand_drop_channel_new(dataset_modalities: list, batch_img_data: torch.Tensor, mode: str = "zero"):
+def rand_drop_channel(dataset_modalities: list, batch_img_data: torch.Tensor, mode: str = "zero"):
     
     for i in range(batch_img_data.shape[0]):
         number_of_dropped_modalities = np.random.randint(0, len(dataset_modalities))
@@ -427,19 +425,6 @@ def rand_drop_channel_new(dataset_modalities: list, batch_img_data: torch.Tensor
     
     return batch_img_data, modalities_dropped
 
-def rand_drop_channel(dataset_modalities: list, batch_img_data: torch.Tensor):
-    for i in range (batch_img_data.shape[0]):
-        number_of_dropped_modalities = np.random.randint(0,len(dataset_modalities))
-        modalities_dropped = random.sample(list(np.arange(len(dataset_modalities))), number_of_dropped_modalities)
-        modalities_dropped.sort()
-        batch_img_data[i,modalities_dropped,:,:,:] = 0.
-
-    if len(modalities_dropped) > 0:
-        modalities_dropped = tuple(modalities_dropped)
-    else: 
-        modalities_dropped = "no_drop"
-    return batch_img_data, modalities_dropped
-
 def create_counter_dict():
 
     lst = [0, 1, 2, 3]
@@ -460,21 +445,9 @@ def export_counter_dict(dict, path):
     with open(output_json_path, 'w') as json_file:
         json.dump(dict_with_str_keys, json_file, indent=4)
 
-def initialize_loss_metric(weighted_dice= False, new_eval=True):
-
-        
-    if new_eval:
-        if weighted_dice:
-            class_weights = torch.tensor([0.5,0.1,0.5])
-            loss_function = DiceLoss(to_onehot_y=False, sigmoid=True, weight=class_weights)
-        else:
-            loss_function = DiceLoss(to_onehot_y=False, sigmoid=True)
-    else:
-        if weighted_dice:
-            class_weights = torch.tensor([0.1,0.4,0.1,0.4])
-            loss_function = DiceLoss(softmax=True, to_onehot_y= True, weight=class_weights)
-        else:
-            loss_function = DiceLoss(softmax=True, to_onehot_y= True)
+def initialize_loss_metric():
+  
+    loss_function = DiceLoss(softmax=True, to_onehot_y= True)
     
     sensitivity_metric = ConfusionMatrixMetric(include_background=True, metric_name='sensitivity', reduction="mean", get_not_nans=False)
     precision_metric = ConfusionMatrixMetric(include_background=True, metric_name='precision', reduction="mean", get_not_nans=False)
@@ -578,7 +551,6 @@ def get_test_scenarios():
 
 def load_n_duplicate_mm_weights(source_state_dict, target_state_dict, load_decoder=False, load_out=False):
 
-    
     for name, param in source_state_dict.items():
         if "swinViT" in name:  
             if "patch_embed.proj.weight" in name:  
@@ -721,3 +693,18 @@ def normalize(vol):
                 vol[b, k, ...] = x
     
     return vol
+
+def drop_modality_image_channel(_input, method, idx_to_drop, remaining_modalities):
+
+    missing_modality_image = _input.clone()
+
+    if method == "whole_mean":
+        mean_value = torch.mean(_input)
+        missing_modality_image[:,idx_to_drop,...] = mean_value
+    elif method == "modality_mean":
+        mean_value = torch.mean(_input[:, remaining_modalities, :, :, :],dim=1,keepdim=True)
+        missing_modality_image[:,idx_to_drop,...] = mean_value
+    elif method == "zero":
+        missing_modality_image[:,idx_to_drop,...] = 0
+
+    return missing_modality_image

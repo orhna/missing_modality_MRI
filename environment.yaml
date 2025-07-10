@@ -1,32 +1,19 @@
-name: multimodalenv
+name: final
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
-  - https://repo.anaconda.com/pkgs/main
-  - https://repo.anaconda.com/pkgs/r
+  - defaults
+
 dependencies:
   - python=3.10
-  - cudatoolkit=11.3
-  - pytorch==1.13.0
-  - torchvision==0.14.0
-  - torchaudio==0.13.0
-  - pytorch-cuda=11.7
-
-  # Core libraries
+  - monai=1.3.2
   - numpy=1.26.4
-  - scipy
+  - nibabel=5.2.1
   - jupyter
   - matplotlib
   - tqdm
   - tensorboard
   - tensorboardx
-
-  # Deep learning utilities
-  - monai=1.3.2
   - einops
-  - torchinfo
-
-  # I/O and data
-  - nibabel=5.2.1
   - gdown
-  - moviepy
-  - synapseclient

@@ -1,3 +1,6 @@
+# legacy code
+# used in experiments that didn't yield decent results
+
 import torch
 import torch.nn.functional as F
 from nets.multimodal_swinunetr import Multimodal_SwinUNETR
@@ -26,9 +29,9 @@ class memoryNet(torch.nn.Module):
         self.multiplier = 1 if self.diff_on == "combined" else 4
 
 
-        self.memory_size = 50 #config.memory_size
+        self.memory_size = 50 
         self.feature_dim = (768, 4, 4, 4)
-        flat_dim = torch.tensor(self.feature_dim).prod().item()  # 768*4*4*4
+        flat_dim = torch.tensor(self.feature_dim).prod().item()  
         
         # feature extraction related
         self.swinunetr = Multimodal_SwinUNETR(
@@ -42,7 +45,7 @@ class memoryNet(torch.nn.Module):
             dec_upsample=config.dec_upsample).to(self.device)
 
         # memory related
-        self.memory = torch.empty((self.memory_size, flat_dim)) # [200, 192 * 4 * 4 * 4]
+        self.memory = torch.empty((self.memory_size, flat_dim)) 
         self.memory = torch.nn.init.normal_(self.memory, mean=0, std=1)
         self.memory = torch.nn.Parameter(self.memory, requires_grad=True).to(self.device)
         self.modality_size = 192 * 4 * 4 * 4  # each modality contributes 192x4x4x4
@@ -91,51 +94,6 @@ class memoryNet(torch.nn.Module):
 
         reconstructed_features = output_flat.view(B, C, H, W, D)  # (B, 768, 4, 4, 4)
         return reconstructed_features
-        """
-        input_features: Tensor of shape (768, 4, 4, 4) -> Feature vector with missing modalities.
-        available_modalities: List of indices indicating available modalities.
-        """
-        """
-        # Identify available/missing indices
-        available_indices = torch.cat([torch.arange(m * self.modality_dim, (m + 1) * self.modality_dim) for m in available_modalities])
-        missing_indices = list(set(range(768)) - set(available_indices.tolist()))
-
-        #print("available_indices:",available_indices)
-        #print("missing_indices:",missing_indices)
-
-        #print(input_features.shape)
-        input_available = input_features[:,available_indices]  # Shape: (available_mods * 192, 4, 4, 4)
-        memory_available = self.memory[:, available_indices]  # Shape: (100, available_mods * 192, 4, 4, 4)
-
-        #print("input_available.shape:",input_available.shape)
-        #print("memory_available.shape:",memory_available.shape)
-
-        # Compute similarity
-        input_flat = F.normalize(input_available.flatten(1), dim=-1)  # (available_mods * 192, 4*4*4)
-        memory_flat = F.normalize(memory_available.flatten(1), dim=-1)  # (100, available_mods * 192, 4*4*4)
-
-        Mem_V = torch.mm(input_flat, memory_flat.transpose(0, 1)) 
-        addressing_V = torch.nn.functional.softmax(Mem_V, dim=-1)
-        retrieved_missing = torch.mm(addressing_V, self.memory) 
-        reconstructed_features = input_features * 1.0  # Shallow copy that preserves graph
-        reconstructed_features[:,missing_indices] = retrieved_missing
-        #print("input_flat.shape:",input_flat.shape)
-        #print("memory_flat.shape:",memory_flat.shape)
-
-        #similarity_scores = F.cosine_similarity(input_flat.unsqueeze(0), memory_flat, dim=-1)  # Shape: (100,)
-        #print("similarity_scores:",similarity_scores.shape)
-        #weights = torch.nn.functional.softmax(similarity_scores, dim=-1) 
-        #print("weights:",weights)
-        #print("weights.shape:",weights.shape)
-
-        #retrieved_missing = torch.sum(weights.view(-1, 1, 1, 1, 1) * self.memory[:, missing_indices], dim=0)
-        #print("available_modalities:",available_modalities)
-        #print("retrieved_missing:",retrieved_missing.shape)
-        #
-        #reconstructed_features = input_features * 1.0  # Shallow copy that preserves graph
-        #reconstructed_features[:,missing_indices] = retrieved_missing
-        """
-        #return reconstructed_features, retrieved_missing, missing_indices
     
     def load_swinunetr_weights(self, checkpoint_path):
 

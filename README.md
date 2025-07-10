@@ -14,6 +14,3 @@ conda create -y -p $ENV_PATH python=$PYTHON_VERSION pip
 pip install -r requirements.txt
 
 
-
-joint recon training
-joint memory training with 2

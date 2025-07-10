@@ -2,7 +2,7 @@ class Training_config:
         
         experiment_name = "test"
         dataset_to_train = ["BRATS18"]
-        modalities_to_train = ["FLAIR", "T1c", "T1", "T2"] # change this order to match the model order if fine-tuning
+        modalities_to_train = ["FLAIR", "T1c", "T1", "T2"] 
         epoch = 500
         seed = 55
         train_batch_size = 1
@@ -17,7 +17,7 @@ class Training_config:
         weight_decay = 1e-4
         recon_level = "hs3_hs4" # {"hs3", "hs4", "hs3_hs4", "none"}
         use_memory = False 
-        continue_training = False
+        continue_training = True
         checkpoint_path = "/data/hjlee/orhun/thesis/models/joint_hs3_hs4_5e-4/joint_hs3_hs4_5e-4_checkpoint_Epoch_400.pt"
         # model_save_path 
         model_save_path = "/data/hjlee/orhun/thesis/models/"

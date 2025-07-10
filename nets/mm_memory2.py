@@ -1,15 +1,17 @@
 from __future__ import annotations
 from collections.abc import Sequence
+from typing_extensions import Final, Dict, Any, Optional, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing_extensions import Final, Dict, Any, Optional, List, Tuple # Added some types
 from monai.networks.blocks import UnetOutBlock, UnetrBasicBlock, UnetrUpBlock, Convolution
 from monai.utils import ensure_tuple_rep, look_up_option, optional_import
-from utils.mm_network_utils import (window_partition,window_reverse,
-                                    WindowAttention,SwinTransformerBlock,PatchMergingV2,PatchMerging,
-                                    SwinTransformer,DeepSupervisionHead)
+from utils.mm_network_utils import (
+    window_partition, window_reverse, WindowAttention, SwinTransformerBlock,
+    PatchMergingV2, PatchMerging, SwinTransformer, DeepSupervisionHead
+)
+
 rearrange, _ = optional_import("einops", name="rearrange")
 MERGING_MODE = {"merging": PatchMerging, "mergingv2": PatchMergingV2}
 
@@ -26,14 +28,24 @@ __all__ = [
     "SwinTransformer",
 ]
 
+# =========================
+# Memory Module
+# =========================
+
 class FeatureMemory(nn.Module):
     """
-    A memory module that stores and retrieves feature prototypes for different modalities.
-    It uses a queue-based memory bank for each modality. When a modality is missing,
+    Memory module for storing and retrieving feature prototypes for different modalities.
+
+    Uses a queue-based memory bank for each modality. When a modality is missing,
     it uses an available modality's features to query the memory (based on cosine similarity)
     and retrieve a corresponding feature prototype for the missing modality.
+
+    Args:
+        num_modalities (int): Number of modalities.
+        feature_dim (int): Feature dimension for memory.
+        memory_size (int): Number of prototypes to store per modality.
     """
-    def __init__(self, num_modalities, feature_dim, memory_size):
+    def __init__(self, num_modalities: int, feature_dim: int, memory_size: int):
         super().__init__()
         self.num_modalities = num_modalities
         self.feature_dim = feature_dim
@@ -45,42 +57,89 @@ class FeatureMemory(nn.Module):
 
     @torch.no_grad()
     def _update_memory(self, prototypes: torch.Tensor, mod_idx: int):
-        """ Update memory bank for a given modality with new prototypes. """
+        """
+        Update memory bank for a given modality with new prototypes.
+
+        Args:
+            prototypes (torch.Tensor): Prototypes to add (B, feature_dim).
+            mod_idx (int): Modality index.
+        """
         batch_size = prototypes.shape[0]
         ptr = int(getattr(self, f"ptr_{mod_idx}")[0])
         memory_bank = getattr(self, f"memory_{mod_idx}")
 
         indices = torch.arange(ptr, ptr + batch_size).to(prototypes.device) % self.memory_size
         memory_bank[indices] = F.normalize(prototypes, dim=1)
-        
         ptr = (ptr + batch_size) % self.memory_size
         getattr(self, f"ptr_{mod_idx}")[0] = ptr
 
-    def _get_prototype_from_tokens(self, tokens: torch.Tensor):
-        """ Get a single prototype vector from a batch of tokens by averaging. """
+    def _get_prototype_from_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """
+        Get a single prototype vector from a batch of tokens by averaging.
+
+        Args:
+            tokens (torch.Tensor): Tokens (B, N, D).
+
+        Returns:
+            torch.Tensor: Prototype (B, D).
+        """
         return tokens.mean(dim=1)
 
     @torch.no_grad()
-    def retrieve(self, query_tokens: torch.Tensor, query_mod_idx: int, missing_mod_idx: int):
-        """ Retrieve a feature prototype for a missing modality. """
+    def retrieve(self, query_tokens: torch.Tensor, query_mod_idx: int, missing_mod_idx: int) -> torch.Tensor:
+        """
+        Retrieve a feature prototype for a missing modality.
+
+        Args:
+            query_tokens (torch.Tensor): Query tokens (B, N, D).
+            query_mod_idx (int): Index of available modality.
+            missing_mod_idx (int): Index of missing modality.
+
+        Returns:
+            torch.Tensor: Retrieved prototype (B, D).
+        """
         query_prototype = self._get_prototype_from_tokens(query_tokens.detach())
         query_prototype = F.normalize(query_prototype, dim=1)
-        
         memory_to_query = getattr(self, f"memory_{query_mod_idx}")
         memory_to_value = getattr(self, f"memory_{missing_mod_idx}")
 
         attn = torch.einsum('bd,md->bm', query_prototype, memory_to_query)
         attn = F.softmax(attn, dim=1)
-
         retrieved_prototype = torch.einsum('bm,md->bd', attn, memory_to_value)
         return retrieved_prototype
 
+# =========================
+# Main Model
+# =========================
 
 class Multimodal_SwinUNETR(nn.Module):
     """
-    Swin UNETR based on: "Hatamizadeh et al.,
-    Swin UNETR: Swin Transformers for Semantic Segmentation of Brain Tumors in MRI Images
-    <https://arxiv.org/abs/2201.01266>"
+    Swin UNETR for multimodal MRI segmentation with optional memory-based feature reconstruction.
+
+    Based on: "Hatamizadeh et al., Swin UNETR: Swin Transformers for Semantic Segmentation of Brain Tumors in MRI Images"
+    <https://arxiv.org/abs/2201.01266>
+
+    Args:
+        img_size (Sequence[int] | int): Input image size.
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        num_modalities (int): Number of modalities.
+        depths (Sequence[int]): Swin transformer depths.
+        num_heads (Sequence[int]): Swin transformer heads.
+        feature_size (int): Base feature size.
+        norm_name (tuple | str): Normalization type.
+        drop_rate (float): Dropout rate.
+        attn_drop_rate (float): Attention dropout rate.
+        dropout_path_rate (float): Drop path rate.
+        normalize (bool): Whether to normalize input.
+        use_checkpoint (bool): Use checkpointing.
+        spatial_dims (int): Number of spatial dimensions.
+        downsample (str): Downsampling mode.
+        use_v2 (bool): Use v2 blocks.
+        use_memory (bool): Use memory module for feature reconstruction.
+        memory_size (int): Memory size for each modality.
+        memory_feature_dim (int): Feature dimension for memory.
+        device: Device to use.
     """
 
     patch_size: Final[int] = 2
@@ -90,7 +149,7 @@ class Multimodal_SwinUNETR(nn.Module):
         img_size: Sequence[int] | int,
         in_channels: int,
         out_channels: int,
-        num_modalities: int = 2, # MODIFIED: Added num_modalities parameter, default to 2
+        num_modalities: int = 2,
         depths: Sequence[int] = (2, 2, 2, 2),
         num_heads: Sequence[int] = (3, 6, 12, 24),
         feature_size: int = 24,
@@ -103,9 +162,9 @@ class Multimodal_SwinUNETR(nn.Module):
         spatial_dims: int = 3,
         downsample="merging",
         use_v2=False,
-        use_memory: bool = False, # MODIFIED: Add use_memory flag
-        memory_size: int = 1024, # MODIFIED: Add memory_size
-        memory_feature_dim: int = 128, # MODIFIED: Add memory_feature_dim
+        use_memory: bool = False,
+        memory_size: int = 1024,
+        memory_feature_dim: int = 128,
         device = None,
     ) -> None:
 
@@ -135,7 +194,7 @@ class Multimodal_SwinUNETR(nn.Module):
         self.normalize = normalize
         self.feature_size = feature_size
         self.is_training = True
-        self.num_modalities = num_modalities # MODIFIED: Store num_modalities
+        self.num_modalities = num_modalities
         self.use_memory = use_memory
 
         self.hs3_memory_params: Optional[Dict[str, Any]] = None
@@ -175,7 +234,7 @@ class Multimodal_SwinUNETR(nn.Module):
             spatial_dims=spatial_dims,
             downsample=look_up_option(downsample, MERGING_MODE) if isinstance(downsample, str) else downsample,
             use_v2=use_v2,
-        ) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+        ) for _ in range(self.num_modalities)])
         
         self.encoder1_list = nn.ModuleList([UnetrBasicBlock(
             spatial_dims=spatial_dims,
@@ -184,7 +243,7 @@ class Multimodal_SwinUNETR(nn.Module):
             kernel_size=3,
             stride=1,
             norm_name=norm_name,
-            res_block=True) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+            res_block=True) for _ in range(self.num_modalities)])
         
         self.encoder2_list = nn.ModuleList([UnetrBasicBlock(
             spatial_dims=spatial_dims,
@@ -193,7 +252,7 @@ class Multimodal_SwinUNETR(nn.Module):
             kernel_size=3,
             stride=1,
             norm_name=norm_name,
-            res_block=True) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+            res_block=True) for _ in range(self.num_modalities)])
         
         self.encoder3_list = nn.ModuleList([UnetrBasicBlock(
             spatial_dims=spatial_dims,
@@ -202,7 +261,7 @@ class Multimodal_SwinUNETR(nn.Module):
             kernel_size=3,
             stride=1,
             norm_name=norm_name,
-            res_block=True) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+            res_block=True) for _ in range(self.num_modalities)])
         
         self.encoder4_list = nn.ModuleList([UnetrBasicBlock(
             spatial_dims=spatial_dims,
@@ -211,7 +270,7 @@ class Multimodal_SwinUNETR(nn.Module):
             kernel_size=3,
             stride=1,
             norm_name=norm_name,
-            res_block=True) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+            res_block=True) for _ in range(self.num_modalities)])
 
         self.encoder10_list = nn.ModuleList([UnetrBasicBlock(
             spatial_dims=spatial_dims,
@@ -220,7 +279,7 @@ class Multimodal_SwinUNETR(nn.Module):
             kernel_size=3,
             stride=1,
             norm_name=norm_name,
-            res_block=True) for _ in range(self.num_modalities)]) # MODIFIED: Use self.num_modalities
+            res_block=True) for _ in range(self.num_modalities)])
 
         self.channel_reductions = nn.ModuleList([
                                         Convolution(spatial_dims=3, # enc0
@@ -409,8 +468,18 @@ class Multimodal_SwinUNETR(nn.Module):
         self.ds_head1 = DeepSupervisionHead(in_channels=2 * feature_size, out_channels=out_channels, scale_factor=4)
         self.ds_head0 = DeepSupervisionHead(in_channels=feature_size, out_channels=out_channels, scale_factor=2)
     
-    def _get_stage_spatial_dims(self, swin_list_idx: int, img_size: Tuple[int, ...], patch_sizes: Tuple[int, ...]):
-        """Calculates spatial dimensions for a given Swin stage output."""
+    def _get_stage_spatial_dims(self, swin_list_idx: int, img_size: Tuple[int, ...], patch_sizes: Tuple[int, ...]) -> Tuple[int, int, int]:
+        """
+        Calculates spatial dimensions for a given Swin stage output.
+
+        Args:
+            swin_list_idx (int): Swin stage index.
+            img_size (Tuple[int, ...]): Image size.
+            patch_sizes (Tuple[int, ...]): Patch sizes.
+
+        Returns:
+            Tuple[int, int, int]: Spatial dimensions (D, H, W).
+        """
         s_d, s_h, s_w = tuple(i // p for i, p in zip(img_size, patch_sizes))
         if swin_list_idx > 0: # Downsampling happens after each swin layer
             # The output of swin layer i (hs[i]) is downsampled i times by a factor of 2 from patch-embedded resolution.
@@ -421,7 +490,21 @@ class Multimodal_SwinUNETR(nn.Module):
     def _initialize_memory_modules(self, stage_idx: int, img_size_tuple: Tuple[int, ...], 
                                   patch_sizes_tuple: Tuple[int, ...], base_feature_size: int,
                                   memory_feature_dim: int, memory_size: int, num_modalities: int) -> Dict[str, Any]:
-        """Initializes memory and projection modules for a given stage."""
+        """
+        Initializes memory and projection modules for a given stage.
+
+        Args:
+            stage_idx (int): Swin stage index.
+            img_size_tuple (Tuple[int, ...]): Image size.
+            patch_sizes_tuple (Tuple[int, ...]): Patch sizes.
+            base_feature_size (int): Base feature size.
+            memory_feature_dim (int): Feature dimension for memory.
+            memory_size (int): Memory size.
+            num_modalities (int): Number of modalities.
+
+        Returns:
+            Dict[str, Any]: Memory and projection modules.
+        """
         input_channels = base_feature_size * (2 ** stage_idx)
         spatial_dims = self._get_stage_spatial_dims(stage_idx, img_size_tuple, patch_sizes_tuple)
         
@@ -438,7 +521,18 @@ class Multimodal_SwinUNETR(nn.Module):
                                      is_modality_present: List[bool], 
                                      num_missing: int,
                                      memory_params: Dict[str, Any]) -> List[torch.Tensor]:
-        """Performs memory update and retrieval for a given stage."""
+        """
+        Performs memory update and retrieval for a given stage.
+
+        Args:
+            raw_features (List[torch.Tensor]): Raw features for each modality.
+            is_modality_present (List[bool]): List indicating which modalities are present.
+            num_missing (int): Number of missing modalities.
+            memory_params (Dict[str, Any]): Memory and projection modules.
+
+        Returns:
+            List[torch.Tensor]: Final features for each modality.
+        """
 
         # 1. Project all raw features to common embedding dim and get tokens
         tokens_raw = []
@@ -476,6 +570,19 @@ class Multimodal_SwinUNETR(nn.Module):
         return final_features
     
     def forward(self, x_in: torch.Tensor, modalities_dropped_info: list | tuple | str | None = None):
+        """
+        Forward pass of the model.
+
+        Args:
+            x_in (torch.Tensor): Input tensor of shape (B, C, ...).
+            modalities_dropped_info (list | tuple | str | None): Info about dropped modalities.
+
+        Returns:
+            If self.is_training:
+                Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]: Main output, deep supervision outputs, separate decoder outputs.
+            Else:
+                torch.Tensor: Main output.
+        """
         if not torch.jit.is_scripting():
             self._check_input_size(x_in.shape[2:])
 
@@ -583,6 +690,12 @@ class Multimodal_SwinUNETR(nn.Module):
 
     @torch.jit.unused
     def _check_input_size(self, spatial_shape):
+        """
+        Check if the input spatial shape is valid for the patch size.
+
+        Args:
+            spatial_shape: Spatial shape of the input.
+        """
         img_size = np.array(spatial_shape)
         remainder = (img_size % np.power(self.patch_size, 5)) > 0
         if remainder.any():

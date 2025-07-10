@@ -1,65 +1,86 @@
-import random
-import numpy as np
-import json
-import importlib.util
 import os
+import random
 import itertools
+import importlib.util
+import json
 from collections import OrderedDict
+from typing import List, Tuple, Union
 
-from monai.transforms import (Lambda,
-                               Compose, EnsureChannelFirst,
-                                 RandSpatialCrop, RandRotate90, 
-                                 NormalizeIntensity, RandAdjustContrast,
-                                   RandZoom, RandFlip, RandGaussianNoise,
-                                     RandGaussianSmooth, RandAdjustContrast,
-                                     ConvertToMultiChannelBasedOnBratsClasses,
-                                     RandScaleIntensity, RandShiftIntensity,
-                                     SpatialCrop, SpatialPad
-                                )
-from monai.data import ImageDataset,DataLoader
+import numpy as np
 import torch
-from monai.metrics import DiceMetric,ConfusionMatrixMetric,MeanIoU
-from monai.transforms import Activations, AsDiscrete, Compose
+from monai.transforms import (
+    Lambda, Compose, EnsureChannelFirst, RandSpatialCrop, RandRotate90, 
+    NormalizeIntensity, RandScaleIntensity, RandShiftIntensity, RandFlip,
+    ConvertToMultiChannelBasedOnBratsClasses, SpatialCrop
+)
+from monai.data import ImageDataset, DataLoader
+from monai.metrics import DiceMetric, ConfusionMatrixMetric, MeanIoU
+from monai.transforms import Activations, AsDiscrete
 from monai.losses.dice import DiceLoss
 from monai.visualize.img2tensorboard import plot_2d_or_3d_image
 
-def initialize_GPU(device_id):
-        print("Running on GPU:" + str(device_id))
-        print(torch.cuda.is_available())  # Should return True if CUDA is available
-        print(torch.cuda.device_count())
-        cuda_id = "cuda:" + str(device_id)
-        device = torch.device(cuda_id)
-        torch.cuda.set_device(device_id)    
-            
-        return device
+# =========================
+# GPU/Device Utilities
+# =========================
 
-def initialize_GPUs(device_id_list):
-        print("Running on GPUs:" + str(device_id_list[0])+" and " + str(device_id_list[1]))
-        print(torch.cuda.is_available())  # Should return True if CUDA is available
-        print(torch.cuda.device_count())
-        cuda_id_1 = "cuda:" + str(device_id_list[0])
-        cuda_id_2 = "cuda:" + str(device_id_list[1])
+def initialize_GPU(device_id: int) -> torch.device:
+    """
+    Initialize and return a CUDA device.
 
-        device_1 = torch.device(cuda_id_1)
-        device_2 = torch.device(cuda_id_2)
+    Args:
+        device_id (int): GPU device ID.
 
-        return [device_1, device_2]
+    Returns:
+        torch.device: The CUDA device.
+    """
+    print(f"Running on GPU: {device_id}")
+    print(torch.cuda.is_available())
+    print(torch.cuda.device_count())
+    cuda_id = f"cuda:{device_id}"
+    device = torch.device(cuda_id)
+    torch.cuda.set_device(device_id)
+    return device
 
-def separate_paths(image_list, label_list, train_file, val_file):
-    
+def initialize_GPUs(device_id_list: List[int]) -> List[torch.device]:
+    """
+    Initialize and return a list of CUDA devices.
+
+    Args:
+        device_id_list (List[int]): List of GPU device IDs.
+
+    Returns:
+        List[torch.device]: List of CUDA devices.
+    """
+    print(f"Running on GPUs: {device_id_list}")
+    print(torch.cuda.is_available())
+    print(torch.cuda.device_count())
+    return [torch.device(f"cuda:{i}") for i in device_id_list]
+
+# =========================
+# Data Loading Utilities
+# =========================
+
+def separate_paths(image_list: List[str], label_list: List[str], train_file: str, val_file: str) -> Tuple[List[str], List[str], List[str], List[str]]:
+    """
+    Separate image and label paths into training and validation sets.
+
+    Args:
+        image_list (List[str]): List of image file paths.
+        label_list (List[str]): List of label file paths.
+        train_file (str): Path to file listing training samples.
+        val_file (str): Path to file listing validation samples.
+
+    Returns:
+        Tuple[List[str], List[str], List[str], List[str]]: (train_images, train_labels, val_images, val_labels)
+    """
     def read_file(file_path):
         with open(file_path, 'r') as file:
             return [line.strip() for line in file.readlines()]
 
-    # Read train and validation sample names
     train_samples = read_file(train_file)
     val_samples = read_file(val_file)
+    train_images, train_labels, val_images, val_labels = [], [], [], []
 
-    # Initialize lists for training and validation subsets
-    train_images, train_labels = [], []
-    val_images, val_labels = [], []
-
-    # Separate paths based on sample names
     for image, label in zip(image_list, label_list):
         sample_name = os.path.basename(image).replace('.nii.gz', '')
         if sample_name in train_samples:
@@ -68,223 +89,62 @@ def separate_paths(image_list, label_list, train_file, val_file):
         if sample_name in val_samples:
             val_images.append(image)
             val_labels.append(label)
-
     return train_images, train_labels, val_images, val_labels
 
-def create_dataloader_original(images,
-                                segs,
-                                train_file, val_file,
-                                workers,
-                                train_batch_size: int,
-                                cropped_input_size:list,
-                                channel_indices):
+def get_loaders(
+    images: List[str], segs: List[str], train_file: str, val_file: str,
+    workers: int, train_batch_size: int, cropped_input_size: List[int], channel_indices: List[int]
+) -> Tuple[DataLoader, DataLoader]:
+    """
+    Create training and validation data loaders.
 
+    Args:
+        images (List[str]): List of image file paths.
+        segs (List[str]): List of segmentation file paths.
+        train_file (str): Path to training split file.
+        val_file (str): Path to validation split file.
+        workers (int): Number of worker processes.
+        train_batch_size (int): Training batch size.
+        cropped_input_size (List[int]): Crop size for input images.
+        channel_indices (List[int]): Indices of channels to select.
+
+    Returns:
+        Tuple[DataLoader, DataLoader]: (train_loader, val_loader)
+    """
     train_images, train_segs, val_images, val_segs = separate_paths(images, segs, train_file, val_file)
 
     def select_channels(x):
         if x.ndim == 4:
             return x[..., channel_indices]
-        else:
-            return x
+        return x
 
-    # image augmentation through spatial cropping to size and by randomly rotating
-    train_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            RandFlip(prob=0.5,spatial_axis=[0, 1, 2]),
-            NormalizeIntensity(nonzero=True, channel_wise=True),
-            RandScaleIntensity(factors=0.1, prob=0.1),
-            RandShiftIntensity(offsets=0.1, prob=0.1),
-            RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ]
-    )
-    train_labeltrans = Compose(
-        [   #Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            ConvertToMultiChannelBasedOnBratsClassesCustom(),
-            RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-
-    val_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(),
-            NormalizeIntensity(nonzero=True,channel_wise=True)])
-    val_segtrans = Compose([EnsureChannelFirst(),ConvertToMultiChannelBasedOnBratsClassesCustom()])
-    
-    # create a training data loader
-    train_ds = ImageDataset(train_images, train_segs, transform=train_imtrans, seg_transform=train_labeltrans)
-    
-    train_loader = DataLoader(train_ds,
-                            batch_size=train_batch_size,
-                            shuffle=True,
-                            num_workers=workers,
-                            pin_memory=0)
-    
-    # create a validation data loader
-    val_ds = ImageDataset(val_images, val_segs, transform=val_imtrans, seg_transform=val_segtrans)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=workers, pin_memory=0)
-    return train_loader, val_loader
-
-
-def get_ldm_loaders(images,
-                segs,
-                train_file, val_file,
-                workers,
-                train_batch_size: int,
-                cropped_input_size:list,
-                channel_indices):
-
-    train_images, train_segs, val_images, val_segs = separate_paths(images, segs, train_file, val_file)
-
-    def select_channels(x):
-        if x.ndim == 4:
-            return x[..., channel_indices]
-        else:
-            return x
-
-    train_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            NormalizeIntensity(nonzero=True,channel_wise=True),
-            #RandFlip(prob=0.5,spatial_axis=[0, 1, 2]),
-            #RandGaussianNoise(prob=0.15, mean=0.0, std= 0.33),
-            #RandGaussianSmooth(prob=0.15, sigma_x=(0.5, 1.5),sigma_y=(0.5, 1.5),sigma_z=(0.5, 1.5)),
-            #RandAdjustContrast(prob=0.15, gamma=(0.7, 1.3)),
-            #RandScaleIntensity(factors=0.1, prob=1.0),
-            #RandShiftIntensity(offsets=0.1, prob=1.0),
-            #RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            SpatialCrop(roi_center=(66,85,70),roi_size=(128,128,128)) # 132,174,140
-            #RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-    train_labeltrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            ConvertToMultiChannelBasedOnBratsClassesCustom(),
-            #RandFlip(prob=0.5,spatial_axis=[0, 1, 2]),
-            #RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            SpatialCrop(roi_center=(66,85,70),roi_size=(128,128,128))
-            #RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-
-    val_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(),
-            NormalizeIntensity(nonzero=True,channel_wise=True),
-            SpatialCrop(roi_center=(66,85,70),roi_size=(128,128,128)) # 132,174,140
-
-        ])
+    train_imtrans = Compose([
+        Lambda(select_channels),
+        EnsureChannelFirst(strict_check=True),
+        NormalizeIntensity(nonzero=True, channel_wise=True),
+        RandSpatialCrop(tuple(cropped_input_size), random_size=False),
+        RandRotate90(prob=0.1, spatial_axes=(0, 2))
+    ])
+    train_labeltrans = Compose([
+        EnsureChannelFirst(strict_check=True),
+        ConvertToMultiChannelBasedOnBratsClassesCustom(),
+        RandSpatialCrop(tuple(cropped_input_size), random_size=False),
+        RandRotate90(prob=0.1, spatial_axes=(0, 2))
+    ])
+    val_imtrans = Compose([
+        Lambda(select_channels),
+        EnsureChannelFirst(),
+        NormalizeIntensity(nonzero=True, channel_wise=True)
+    ])
     val_segtrans = Compose([
-            EnsureChannelFirst(),
-            ConvertToMultiChannelBasedOnBratsClassesCustom(),
-            SpatialCrop(roi_center=(66,85,70),roi_size=(128,128,128)) # 132,174,140
-        ])
-    
-    # create a training data loader
+        EnsureChannelFirst(),
+        ConvertToMultiChannelBasedOnBratsClassesCustom()
+    ])
+
     train_ds = ImageDataset(train_images, train_segs, transform=train_imtrans, seg_transform=train_labeltrans)
     train_loader = DataLoader(train_ds, batch_size=train_batch_size, drop_last=True, shuffle=True, num_workers=workers, pin_memory=0)
-    
-    # create a validation data loader
     val_ds = ImageDataset(val_images, val_segs, transform=val_imtrans, seg_transform=val_segtrans)
     val_loader = DataLoader(val_ds, batch_size=1, num_workers=workers, pin_memory=0)
-    
-    return train_loader, val_loader
-
-
-def get_loaders_192(images,
-                segs,
-                train_file, val_file,
-                workers,
-                train_batch_size: int,
-                channel_indices):
-
-    train_images, train_segs, val_images, val_segs = separate_paths(images, segs, train_file, val_file)
-
-    def select_channels(x):
-        if x.ndim == 4:
-            return x[channel_indices,...]
-        else:
-            return x
-
-    train_imtrans = Compose(
-        [   Lambda(select_channels),
-            #EnsureChannelFirst(strict_check=True),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-    train_labeltrans = Compose(
-        [   #EnsureChannelFirst(strict_check=True),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-
-    val_imtrans = Compose(
-        [   Lambda(select_channels),
-            #EnsureChannelFirst(),
-        ])
-    val_segtrans = Compose([
-            #EnsureChannelFirst(),
-        ])
-    
-    # create a training data loader
-    train_ds = ImageDataset(train_images, train_segs, transform=train_imtrans, seg_transform=train_labeltrans)
-    train_loader = DataLoader(train_ds, batch_size=train_batch_size, drop_last=True, shuffle=True, num_workers=workers, pin_memory=0)
-    
-    # create a validation data loader
-    val_ds = ImageDataset(val_images, val_segs, transform=val_imtrans, seg_transform=val_segtrans)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=workers, pin_memory=0)
-    
-    return train_loader, val_loader
-
-
-def get_loaders(images,
-                segs,
-                train_file, val_file,
-                workers,
-                train_batch_size: int,
-                cropped_input_size:list,
-                channel_indices):
-
-    train_images, train_segs, val_images, val_segs = separate_paths(images, segs, train_file, val_file)
-
-    def select_channels(x):
-        if x.ndim == 4:
-            return x[..., channel_indices]
-        else:
-            return x
-
-    train_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            NormalizeIntensity(nonzero=True,channel_wise=True),
-            RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-    train_labeltrans = Compose(
-        [   #Lambda(select_channels),
-            EnsureChannelFirst(strict_check=True),
-            ConvertToMultiChannelBasedOnBratsClassesCustom(),
-            RandSpatialCrop((cropped_input_size[0], cropped_input_size[1], cropped_input_size[2]), random_size=False),
-            RandRotate90(prob=0.1, spatial_axes=(0, 2))
-        ])
-
-    val_imtrans = Compose(
-        [   Lambda(select_channels),
-            EnsureChannelFirst(),
-            NormalizeIntensity(nonzero=True,channel_wise=True)
-        ])
-    val_segtrans = Compose([
-            EnsureChannelFirst(),
-            ConvertToMultiChannelBasedOnBratsClassesCustom()
-        ])
-    
-    # create a training data loader
-    train_ds = ImageDataset(train_images, train_segs, transform=train_imtrans, seg_transform=train_labeltrans)
-    train_loader = DataLoader(train_ds, batch_size=train_batch_size, drop_last=True, shuffle=True, num_workers=workers, pin_memory=0)
-    
-    # create a validation data loader
-    val_ds = ImageDataset(val_images, val_segs, transform=val_imtrans, seg_transform=val_segtrans)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=workers, pin_memory=0)
-    
     return train_loader, val_loader
 
 def get_test_loader(img_path,
@@ -364,7 +224,18 @@ def get_test_loader_BRATS21(images_folder, txt_file, channel_indices):
     print(len(test_ds))
     return test_loader
 
-def save_config_from_py(file_path, logdir):
+# =========================
+# Configuration Utilities
+# =========================
+
+def save_config_from_py(file_path: str, logdir: str) -> None:
+    """
+    Save configuration from a Python file as a JSON file.
+
+    Args:
+        file_path (str): Path to the Python config file.
+        logdir (str): Directory to save the JSON config.
+    """
     # Load the Python file as a module
     module_name = os.path.splitext(os.path.basename(file_path))[0]
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -395,7 +266,37 @@ def save_config_from_py(file_path, logdir):
     
     print("Config saved as .json")
 
-def rand_drop_channel(dataset_modalities: list, batch_img_data: torch.Tensor, mode: str = "zero"):
+# =========================
+# Randomness & Augmentation
+# =========================
+
+def set_random_seed(seed: int) -> None:
+    """
+    Set random seed for reproducibility.
+
+    Args:
+        seed (int): The seed value.
+    """
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+def rand_drop_channel(
+    dataset_modalities: list, batch_img_data: torch.Tensor, mode: str = "zero"
+) -> Tuple[torch.Tensor, Union[Tuple[int, ...], str]]:
+    """
+    Randomly drop channels/modalities in a batch.
+
+    Args:
+        dataset_modalities (list): List of modalities.
+        batch_img_data (torch.Tensor): Batch of images.
+        mode (str): Drop mode ("zero", "modmean", "noise").
+
+    Returns:
+        Tuple[torch.Tensor, Union[Tuple[int, ...], str]]: Modified batch and dropped modalities.
+    """
     
     for i in range(batch_img_data.shape[0]):
         number_of_dropped_modalities = np.random.randint(0, len(dataset_modalities))
@@ -445,7 +346,17 @@ def export_counter_dict(dict, path):
     with open(output_json_path, 'w') as json_file:
         json.dump(dict_with_str_keys, json_file, indent=4)
 
+# =========================
+# Metrics & Logging
+# =========================
+
 def initialize_loss_metric():
+    """
+    Initialize loss function and metrics.
+
+    Returns:
+        tuple: (loss_function, dice_metric, sensitivity_metric, precision_metric, IOU_metric, post_trans)
+    """
   
     loss_function = DiceLoss(softmax=True, to_onehot_y= True)
     
@@ -459,6 +370,15 @@ def initialize_loss_metric():
     return loss_function, dice_metric, sensitivity_metric, precision_metric, IOU_metric, post_trans
 
 def log_metrics(writer, metric, epoch, dataset_name):
+    """
+    Log validation metrics to TensorBoard.
+
+    Args:
+        writer (SummaryWriter): TensorBoard writer.
+        metric (dict): Dictionary of metrics.
+        epoch (int): Current epoch.
+        dataset_name (str): Name of the dataset.
+    """
     writer.add_scalar(f"Validation/{dataset_name}/IOU", metric["IOU"] , epoch)
     writer.add_scalar(f"Validation/{dataset_name}/dice_WT", metric["dice_WT"], epoch)
     writer.add_scalar(f"Validation/{dataset_name}/dice_TC", metric["dice_TC"], epoch)
@@ -476,15 +396,6 @@ def get_rgb(tensor):
     rgb_volume[2][tensor == 3] = 255  # Blue for label 3
     return rgb_volume
 
-def get_rgb_overlay(input, label):
-    # Create a blank RGB volume
-    label = label.squeeze(0).squeeze(0)
-    rgb_volume = input.repeat(3,1,1,1)
-    #rgb_volume[0][label == 1] = 255  # Red for label 1
-    #rgb_volume[1][label == 2] = 255  # Green for label 2
-    #rgb_volume[2][label == 3] = 255  # Blue for label 3
-    return rgb_volume
-
 def log_visuals(modalities_to_train, input, outputs, labels, epoch, writer, dataset_name):
  
     for k in range(len(modalities_to_train)):
@@ -494,14 +405,14 @@ def log_visuals(modalities_to_train, input, outputs, labels, epoch, writer, data
     plot_2d_or_3d_image(rgb_pred, step=epoch, writer=writer, index=0, max_channels=3, tag=f"{dataset_name}/A_Pred_RGB")
     plot_2d_or_3d_image(rgb_gt, step=epoch, writer=writer, index=0, max_channels=3, tag=f"{dataset_name}/A_GT_RGB")
 
-def set_random_seed(x):
-    torch.manual_seed(x)
-    torch.cuda.manual_seed(x)
-    torch.cuda.manual_seed_all(x)
-    random.seed(x)
-    np.random.seed(x)
+# =========================
+# Miscellaneous Utilities
+# =========================
 
-class AverageMeter(object):
+class AverageMeter:
+    """
+    Computes and stores the average and current value.
+    """
     def __init__(self):
         self.reset()
 
@@ -517,9 +428,10 @@ class AverageMeter(object):
         self.count += n
         self.avg = np.where(self.count > 0, self.sum / self.count, self.sum)
 
-
 class ConvertToMultiChannelBasedOnBratsClassesCustom(ConvertToMultiChannelBasedOnBratsClasses):
-
+    """
+    Custom converter for BRATS classes.
+    """
     def __call__(self, img):
         if img.ndim == 4 and img.shape[0] == 1:
             img = img.squeeze(0)
@@ -548,62 +460,6 @@ def get_test_scenarios():
             [1,1,1,1]]
     
     return scenarios
-
-def load_n_duplicate_mm_weights(source_state_dict, target_state_dict, load_decoder=False, load_out=False):
-
-    for name, param in source_state_dict.items():
-        if "swinViT" in name:  
-            if "patch_embed.proj.weight" in name:  
-                print("skipping first layer weight")
-                continue 
-            if "patch_embed.proj.bias" in name:
-                print("skipping first layer bias")
-                continue  
-            for i in range(4):  
-                target_name = name.replace("swinViT", f"swinViT_{i+1}")
-                if target_name in target_state_dict:
-                    target_state_dict[target_name] = param
-        """
-        if "encoder1" in name:
-            for i in range(4): 
-                target_name = name.replace("encoder1", f"encoder1_{i+1}")
-                print("duplicating encoder1 weights to multi encoders:", f"encoder1_{i+1}")
-                if target_name in target_state_dict:
-                    target_state_dict[target_name] = param
-        """
-        if "encoder2" in name:
-            for i in range(4):  
-                target_name = name.replace("encoder2", f"encoder2_{i+1}")
-                if target_name in target_state_dict:    
-                    target_state_dict[target_name] = param
-        if "encoder3" in name:
-            for i in range(4): 
-                target_name = name.replace("encoder3", f"encoder3_{i+1}")
-                if target_name in target_state_dict:
-                    target_state_dict[target_name] = param
-        if "encoder4" in name:
-            for i in range(4): 
-                target_name = name.replace("encoder4", f"encoder4_{i+1}")
-                if target_name in target_state_dict:
-                    target_state_dict[target_name] = param
-        if "encoder10" in name:
-            for i in range(4): 
-                target_name = name.replace("encoder10", f"encoder10_{i+1}")
-                if target_name in target_state_dict:
-                    target_state_dict[target_name] = param
-        if load_decoder == True:
-            if "decoder" in name:
-                if target_name in target_state_dict:
-                    target_state_dict[name] = param
-        if load_out == True:
-            if "out" in name:
-                if target_name in target_state_dict:
-                        target_state_dict[name] = param
-
-    prefixes_to_remove = ("swinViT.", "encoder1.", "encoder2.","encoder3.","encoder4.","encoder10.")
-    target_state_dict = OrderedDict({k: v for k, v in target_state_dict.items() if not k.startswith(prefixes_to_remove)})
-
-    return  target_state_dict
 
 def test_random_dropping(_input, method, idx_to_drop, remaining_modalities, pc_mean_tensor=None ):
  
@@ -635,64 +491,6 @@ def random_scenario():
                     for subset in itertools.combinations(elements, i)]
 
     return random.choice(valid_subsets)
-
-def sup_128(xmin, xmax):
-    if xmax - xmin < 128:
-        print('#' * 100)
-        ecart = (128 - (xmax - xmin)) // 2
-        xmax = xmax + ecart + 1
-        xmin = xmin - ecart
-    if xmin < 0:
-        xmax -= xmin
-        xmin = 0
-    return xmin, xmax
-
-def crop(vol):
-    """
-    Crop a 5D tensor (B, C, H, W, D) to the smallest bounding box that contains all nonzero elements,
-    while ensuring a minimum size of 128 per dimension.
-    """
-    assert len(vol.shape) == 5  # Ensure input has shape (B, C, H, W, D)
-    B, C, H, W, D = vol.shape
-    cropped_regions = []
-    
-    for b in range(B):
-        vol_b = vol[b]  # Shape (C, H, W, D)
-        vol_b = torch.amax(vol_b, dim=0)  # Max over the channel dimension, shape (H, W, D)
-        
-        nonzero_indices = torch.nonzero(vol_b, as_tuple=True)
-        
-        if len(nonzero_indices[0]) == 0:
-            # If the volume is completely empty, return full dimensions
-            cropped_regions.append((0, H, 0, W, 0, D))
-            continue
-        
-        x_min, x_max = sup_128(torch.min(nonzero_indices[0]).item(), torch.max(nonzero_indices[0]).item())
-        y_min, y_max = sup_128(torch.min(nonzero_indices[1]).item(), torch.max(nonzero_indices[1]).item())
-        z_min, z_max = sup_128(torch.min(nonzero_indices[2]).item(), torch.max(nonzero_indices[2]).item())
-        
-        cropped_regions.append((x_min, x_max, y_min, y_max, z_min, z_max))
-    
-    return cropped_regions
-
-def normalize(vol):
-
-    """
-    Normalize a 5D tensor (B, C, H, W, D) independently for each batch element and channel.
-    """
-    assert len(vol.shape) == 5  # Ensure input has shape (B, C, H, W, D)
-    B, C, H, W, D = vol.shape
-    
-    for b in range(B):
-        for k in range(C):
-            x = vol[b, k, ...]
-            mask = x > 0  # Compute mask for non-zero elements
-            if mask.sum() > 0:  # Avoid division by zero
-                y = x[mask]
-                x = (x - y.mean()) / (y.std() + 1e-8)  # Add small epsilon to avoid division by zero
-                vol[b, k, ...] = x
-    
-    return vol
 
 def drop_modality_image_channel(_input, method, idx_to_drop, remaining_modalities):
 

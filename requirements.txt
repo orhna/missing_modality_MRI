@@ -11,3 +11,4 @@ tensorboard
 tensorboardx
 einops
 gdown
+scipy

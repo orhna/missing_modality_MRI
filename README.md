@@ -45,6 +45,7 @@ Logs will be saved under `/logs/your_experiment_name`
 Set the testing parameters in `config.py` -> `Test_config`, then run:  
 `python test.py --device_id 0`  
 
+Trained model with joint learnable token method on BRATS23 is available [here](https://drive.google.com/file/d/1KfxlzcXKbO3JwMgl_CKhe3mtTm6mLzHM/view?usp=sharing), which should provide the results below.
 
 ## Results
 

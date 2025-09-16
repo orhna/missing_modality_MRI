@@ -1,4 +1,4 @@
-# 🧠 Tackling Missing Modality Problem in Multi-modal Medical Segmentation
+# Analyzing Network Architectures and Feature Recovery Methods for Missing Modality Scenarios in Multi-modal Medical Segmentation
 
 This project explores various strategies to improve brain tumor segmentation in the presence of missing MRI modalities using the BRATS2018 and BRATS2023 datasets. We systematically evaluate and compare several methods, promising ones are provided here for anyone who wants to replicate. Extensive experiments demonstrate that our method achieves competitive performance and generalizes well.  
 
